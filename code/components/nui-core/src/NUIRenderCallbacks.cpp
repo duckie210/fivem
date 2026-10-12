@@ -21,6 +21,19 @@ extern HCURSOR InitDefaultCursor();
 
 extern void TranslateWindowRect(const fwRefContainer<NUIWindow>& window, CRect* rect);
 
+static bool IsHostCursorVisible()
+{
+	CURSORINFO info = { sizeof(CURSORINFO) };
+
+	if (!GetCursorInfo(&info))
+	{
+		// can't tell; assume the host cursor is fine
+		return true;
+	}
+
+	return (info.flags & CURSOR_SHOWING) && info.hCursor != nullptr;
+}
+
 static HookFunction initFunction([] ()
 {
 	g_nuiGi->OnRender.Connect([]()
@@ -134,6 +147,12 @@ static HookFunction initFunction([] ()
 
 			// if the game doesn't support a host cursor, draw the cursor texture
 			if (!g_nuiGi->CanDrawHostCursor())
+			{
+				shouldDrawCursorTexture = true;
+			}
+			// if the host cursor is supported but something has hidden it anyway,
+			// fall back to the cursor texture rather than leaving no cursor at all
+			else if (!IsHostCursorVisible())
 			{
 				shouldDrawCursorTexture = true;
 			}

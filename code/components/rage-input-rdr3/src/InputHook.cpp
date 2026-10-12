@@ -69,16 +69,41 @@ void InputHook::SetHostCursorEnabled(bool enabled)
 {
 	static bool lastEnabled = false;
 
-	if (!lastEnabled && enabled)
+	if (enabled)
 	{
+		// Re-assert visibility every frame rather than only on the transition:
+		// ShowCursor calls that don't go through the game executable's import
+		// table (and so bypass HookShowCursor) would otherwise hide the cursor
+		// until NUI focus is toggled.
 		EnableHostCursor();
 	}
-	else if (lastEnabled && !enabled)
+	else if (lastEnabled)
 	{
 		DisableHostCursor();
 	}
 
+	lastEnabled = enabled;
 	g_useHostCursor = enabled;
+}
+
+// The cursor NUI wants shown. GtaNuiInterface::SetHostCursor stores it as the
+// game window's class cursor, so read it back from there.
+static HCURSOR GetHostCursorHandle(HWND hwnd)
+{
+	auto cursor = reinterpret_cast<HCURSOR>(GetClassLongPtr(hwnd, GCLP_HCURSOR));
+	return (cursor) ? cursor : LoadCursor(nullptr, IDC_ARROW);
+}
+
+// RDR3 hides the OS cursor with SetCursor(NULL), which ShowCursor hooking
+// doesn't cover. While NUI is using the host cursor, ignore those calls.
+static HCURSOR WINAPI SetCursorWrap(HCURSOR cursor)
+{
+	if (g_useHostCursor && !cursor)
+	{
+		return GetCursor();
+	}
+
+	return SetCursor(cursor);
 }
 
 static char* g_gameKeyArray;
@@ -301,6 +326,14 @@ LRESULT APIENTRY sgaWindowProcedure(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM 
 		}
 	}
 
+	// While NUI is using the host cursor, answer WM_SETCURSOR ourselves so the
+	// game's window procedure can't swap in a null cursor on every mouse move.
+	if (uMsg == WM_SETCURSOR && g_useHostCursor && LOWORD(lParam) == HTCLIENT)
+	{
+		SetCursor(GetHostCursorHandle(hwnd));
+		return TRUE;
+	}
+
 	lresult = origWndProc(hwnd, uMsg, wParam, lParam);
 
 	return lresult;
@@ -405,6 +438,8 @@ static HookFunction hookFunction([]()
 	hook::iat("user32.dll", SetCursorPosWrap, "SetCursorPos");
 	// Hook ShowCursor to support host cursor
 	hook::iat("user32.dll", HookShowCursor, "ShowCursor");
+	// Hook SetCursor so the game can't hide the host cursor with a null cursor
+	hook::iat("user32.dll", SetCursorWrap, "SetCursor");
 });
 
 fwEvent<HWND, UINT, WPARAM, LPARAM, bool&, LRESULT&> InputHook::DeprecatedOnWndProc;
